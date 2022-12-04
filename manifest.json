@@ -1,10 +1,10 @@
 {
-	"id": "obsidian-languagetool-plugin",
-	"name": "LanguageTool Integration",
-	"version": "0.3.1",
-	"minAppVersion": "0.15.2",
-	"description": "Spelling and grammar checks with the LanguageTool API",
-	"author": "Clemens Ertle",
-	"authorUrl": "https://github.com/Clemens-E",
-	"isDesktopOnly": false
+  "id": "obsidian-writing-style",
+  "name": "Writing Style",
+  "version": "1.0.0-beta",
+  "minAppVersion": "0.15.2",
+  "description": "Write like a pro with the Vale writing style linter.",
+  "author": "Michael Henriksen",
+  "authorUrl": "https://michenriksen.com/",
+  "isDesktopOnly": false
 }
