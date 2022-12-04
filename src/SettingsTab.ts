@@ -1,394 +1,162 @@
-import { App, DropdownComponent, Modal, PluginSettingTab, Setting, TextComponent } from 'obsidian';
-import LanguageToolPlugin from '.';
+import { App, PluginSettingTab, Setting } from "obsidian";
+import StyleCheckPlugin from ".";
+import { ValeBaseStyle, ValePackage, ValeSeverity } from "./vale/types";
 
-export interface LanguageToolPluginSettings {
-	shouldAutoCheck: boolean;
-
-	serverUrl: string;
-	urlMode: 'standard' | 'premium' | 'custom';
-	glassBg: boolean;
-	apikey?: string;
-	username?: string;
-	staticLanguage?: string;
-
-	englishVeriety?: undefined | 'en-US' | 'en-GB' | 'en-CA' | 'en-AU' | 'en-ZA' | 'en-NZ';
-	germanVeriety?: undefined | 'de-DE' | 'de-AT' | 'de-CH';
-	portugueseVeriety?: undefined | 'pt-BR' | 'pt-PT' | 'pt-AO' | 'pt-MZ';
-	catalanVeriety?: undefined | 'ca-ES' | 'ca-ES-valencia';
-
-	pickyMode: boolean;
-
-	ruleOtherCategories?: string;
-	ruleOtherRules?: string;
-	ruleOtherDisabledRules?: string;
+export interface StyleCheckPluginSettings {
+  saveValeConfig: boolean;
+  shouldAutoCheck: boolean;
+  glassBg: boolean;
+  baseStyle: ValeBaseStyle;
+  enabledPackages: ValePackage[];
+  minAlertLevel: ValeSeverity;
+  ignoreRules: string[];
+  valePath: string;
+  configPath: string;
 }
 
-export const DEFAULT_SETTINGS: LanguageToolPluginSettings = {
-	serverUrl: 'https://api.languagetool.org',
-	urlMode: 'standard',
-
-	glassBg: false,
-	shouldAutoCheck: false,
-
-	pickyMode: false,
+export const DEFAULT_SETTINGS: StyleCheckPluginSettings = {
+  saveValeConfig: true,
+  shouldAutoCheck: false,
+  glassBg: false,
+  baseStyle: "Google",
+  enabledPackages: ["write-good", "alex"],
+  minAlertLevel: "suggestion",
+  ignoreRules: ["Google.Exclamation", "Google.We", "write-good.E-Prime"],
+  valePath: "",
+  configPath: ""
 };
 
-function getServerUrl(value: string) {
-	return value === 'standard'
-		? 'https://api.languagetool.org'
-		: value === 'premium'
-		? 'https://api.languagetoolplus.com'
-		: '';
-}
+const PACKAGES = new Map<ValePackage, string>([
+  [
+    "write-good",
+    "Enables checks for passive voice, weakening adverbs, weasel words, cliches, and more."
+  ],
+  ["alex", "Enables checks for possible insensitive, inconsiderate writing."],
+  ["Joblint", "Enables checks for common issues in Tech job posts."],
+  ["proselint", "Enables checks inspired by the open-source proselint tool."],
+  [
+    "Hugo",
+    "Enables support for shortcodes and other non-standard markup for the Hugo static site generator."
+  ]
+]);
 
-export class LanguageToolSettingsTab extends PluginSettingTab {
-	private readonly plugin: LanguageToolPlugin;
-	private languages: { name: string; code: string; longCode: string }[];
-	public constructor(app: App, plugin: LanguageToolPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+export class StyleCheckSettingsTab extends PluginSettingTab {
+  private readonly plugin: StyleCheckPlugin;
+  public constructor(app: App, plugin: StyleCheckPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
 
-	public async requestLanguages() {
-		if (this.languages) return this.languages;
-		const languages = await fetch(`${this.plugin.settings.serverUrl}/v2/languages`).then(res => res.json());
-		this.languages = languages;
-		return this.languages;
-	}
+  public display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
 
-	public display(): void {
-		const { containerEl } = this;
-		let urlDropdown: DropdownComponent | null = null;
-		containerEl.empty();
-		containerEl.createEl('h2', { text: 'Settings for LanguageTool' });
-		new Setting(containerEl)
-			.setName('Endpoint')
-			.setDesc('Endpoint that will be used to make requests to')
-			.then(setting => {
-				setting.controlEl.style.display = 'inline-grid';
-				let input: TextComponent | null = null;
-				setting.addDropdown(component => {
-					urlDropdown = component;
-					component
-						.addOptions({
-							standard: '(Standard) api.languagetool.org',
-							premium: '(Premium) api.languagetoolplus.com',
-							custom: 'Custom URL',
-						})
-						.setValue(this.plugin.settings.urlMode)
-						.onChange(async value => {
-							this.plugin.settings.urlMode = value as 'standard' | 'premium' | 'custom';
-							this.plugin.settings.serverUrl = getServerUrl(value);
-							input?.setValue(this.plugin.settings.serverUrl);
-							input?.setDisabled(value !== 'custom');
-							await this.plugin.saveSettings();
-						});
-				});
-				setting.addText(text => {
-					input = text;
-					text
-						.setPlaceholder('https://your-custom-url.com')
-						.setValue(this.plugin.settings.serverUrl)
-						.setDisabled(this.plugin.settings.urlMode === 'custom')
-						.onChange(async value => {
-							this.plugin.settings.serverUrl = value.replace(/\/v2\/check\/$/, '').replace(/\/$/, '');
-							await this.plugin.saveSettings();
-						});
-				});
-			});
-		new Setting(containerEl)
-			.setName('API Username')
-			.setDesc('Enter a username/email for API Access')
-			.addText(text =>
-				text
-					.setPlaceholder('peterlustig@gmail.com')
-					.setValue(this.plugin.settings.username || '')
-					.onChange(async value => {
-						this.plugin.settings.username = value.replace(/\s+/g, '');
-						await this.plugin.saveSettings();
-					}),
-			)
-			.then(setting => {
-				setting.descEl.createEl('br');
-				setting.descEl.createEl(
-					'a',
-					{
-						text: 'Click here for information about Premium Access',
-						href: 'https://github.com/Clemens-E/obsidian-languagetool-plugin#premium-accounts',
-					},
-					a => {
-						a.setAttr('target', '_blank');
-					},
-				);
-			});
-		let disableUrlPopup = false;
-		new Setting(containerEl)
-			.setName('API Key')
-			.setDesc('Enter an API Key')
-			.addText(text =>
-				text.setValue(this.plugin.settings.apikey || '').onChange(async value => {
-					this.plugin.settings.apikey = value.replace(/\s+/g, '');
-					if (
-						this.plugin.settings.apikey.length > 0 &&
-						this.plugin.settings.urlMode !== 'premium' &&
-						!disableUrlPopup
-					) {
-						const modal = new Modal(this.app);
-						modal.titleEl.createEl('span', { text: 'Warning' });
-						modal.contentEl.createEl('p', {
-							text: 'You have entered an API Key but you are not using the Premium Endpoint',
-						});
-						modal.contentEl.style.display = 'grid';
-						const container = modal.contentEl.createEl('div', { attr: { style: 'justify-self:center' } });
-						container.createEl('button', {
-							text: "I know what I'm doing",
-							attr: {
-								style: 'justify-self:flex-start; color:red;',
-							},
-						}).onclick = () => {
-							disableUrlPopup = true;
-							modal.close();
-						};
-						container.createEl('button', {
-							text: 'Change to Premium',
-							attr: {
-								style: 'justify-self:flex-end',
-							},
-						}).onclick = async () => {
-							this.plugin.settings.urlMode = 'premium';
-							urlDropdown?.setValue('premium');
-							this.plugin.settings.serverUrl = getServerUrl(value);
-							await this.plugin.saveSettings();
-							return modal.close();
-						};
-						modal.open();
-					}
-					await this.plugin.saveSettings();
-				}),
-			)
-			.then(setting => {
-				setting.descEl.createEl('br');
-				setting.descEl.createEl(
-					'a',
-					{
-						text: 'Click here for information about Premium Access',
-						href: 'https://github.com/Clemens-E/obsidian-languagetool-plugin#premium-accounts',
-					},
-					a => {
-						a.setAttr('target', '_blank');
-					},
-				);
-			});
-		new Setting(containerEl)
-			.setName('Autocheck Text')
-			.setDesc('Check text as you type')
-			.addToggle(component => {
-				component.setValue(this.plugin.settings.shouldAutoCheck).onChange(async value => {
-					this.plugin.settings.shouldAutoCheck = value;
-					await this.plugin.saveSettings();
-				});
-			});
-		new Setting(containerEl)
-			.setName('Glass Background')
-			.setDesc('Use the secondary background color of the theme or a glass background')
-			.addToggle(component => {
-				component.setValue(this.plugin.settings.glassBg).onChange(async value => {
-					this.plugin.settings.glassBg = value;
-					await this.plugin.saveSettings();
-				});
-			});
-		new Setting(containerEl)
-			.setName('Static Language')
-			.setDesc(
-				'Set a static language that will always be used (LanguageTool tries to auto detect the language, this is usually not necessary)',
-			)
-			.addDropdown(component => {
-				this.requestLanguages()
-					.then(languages => {
-						component.addOption('auto', 'Auto Detect');
-						languages.forEach(v => component.addOption(v.longCode, v.name));
-						component.setValue(this.plugin.settings.staticLanguage ?? 'auto');
-						component.onChange(async value => {
-							this.plugin.settings.staticLanguage = value;
-							await this.plugin.saveSettings();
-						});
-					})
-					.catch(console.error);
-			});
+    containerEl.createEl("h2", { text: "Settings for Writing Style" });
 
-		containerEl.createEl('h3', { text: 'Language Varieties' });
+    new Setting(containerEl)
+      .setName("Base Style")
+      .setDesc("A comprehensive style guide to serve as a starting point.")
+      .addDropdown(component => {
+        component
+          .setValue(this.plugin.settings.baseStyle)
+          .addOptions({
+            Google: "Google Developer Documentation Style Guide",
+            Microsoft: "Microsoft Writing Style Guide",
+            RedHat: "Red Hat Documentation Style Guide"
+          })
+          .onChange(async (value: ValeBaseStyle) => {
+            this.plugin.settings.saveValeConfig = true;
+            this.plugin.settings.baseStyle = value;
+            await this.plugin.saveSettings();
+          });
+      });
 
-		containerEl.createEl('p', { text: 'Some languages have varieties depending on the country they are spoken in.' });
+    for (const [name, desc] of PACKAGES) {
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addToggle(component => {
+          component
+            .setValue(this.plugin.settings.enabledPackages.includes(name))
+            .onChange(async value => {
+              if (value === true) {
+                if (!this.plugin.settings.enabledPackages.includes(name)) {
+                  this.plugin.settings.saveValeConfig = true;
+                  this.plugin.settings.enabledPackages.push(name);
+                  await this.plugin.saveSettings();
+                }
+              } else {
+                if (this.plugin.settings.enabledPackages.includes(name)) {
+                  this.plugin.settings.saveValeConfig = true;
+                  this.plugin.settings.enabledPackages.remove(name);
+                  await this.plugin.saveSettings();
+                }
+              }
+            });
+        });
+    }
 
-		new Setting(containerEl).setName('Interpret English as').addDropdown(component => {
-			component
-				.addOptions({
-					default: '---',
-					'en-US': 'English (US)',
-					'en-GB': 'English (British)',
-					'en-CA': 'English (Canada)',
-					'en-AU': 'English (Australia)',
-					'en-ZA': 'English (South Africa)',
-					'en-NZ': 'English (New Zealand)',
-				})
-				.setValue(this.plugin.settings.englishVeriety ?? 'default')
-				.onChange(async value => {
-					if (value === 'default') {
-						this.plugin.settings.englishVeriety = undefined;
-					} else {
-						this.plugin.settings.englishVeriety = value as 'en-US' | 'en-GB' | 'en-CA' | 'en-AU' | 'en-ZA' | 'en-NZ';
-					}
-					await this.plugin.saveSettings();
-				});
-		});
+    containerEl.createEl("h4", { text: "Filtering" });
 
-		new Setting(containerEl).setName('Interpret German as').addDropdown(component => {
-			component
-				.addOptions({
-					default: '---',
-					'de-DE': 'German (Germany)',
-					'de-CH': 'German (Switzerland)',
-					'de-AT': 'German (Austria)',
-				})
-				.setValue(this.plugin.settings.germanVeriety ?? 'default')
-				.onChange(async value => {
-					if (value === 'default') {
-						this.plugin.settings.germanVeriety = undefined;
-					} else {
-						this.plugin.settings.germanVeriety = value as 'de-DE' | 'de-CH' | 'de-AT';
-					}
-					await this.plugin.saveSettings();
-				});
-		});
+    new Setting(containerEl)
+      .setName("Issues")
+      .setDesc("Issues to report.")
+      .addDropdown(component => {
+        component
+          .setValue(this.plugin.settings.minAlertLevel)
+          .addOptions({
+            suggestion: "suggestions, warnings, and errors",
+            warning: "warnings and errors",
+            error: "errors"
+          })
+          .onChange(async (value: ValeSeverity) => {
+            this.plugin.settings.saveValeConfig = true;
+            this.plugin.settings.minAlertLevel = value;
+            await this.plugin.saveSettings();
+          });
+      });
 
-		new Setting(containerEl).setName('Interpret Portuguese as').addDropdown(component => {
-			component
-				.addOptions({
-					default: '---',
-					'pt-BR': 'Portuguese (Brazil)',
-					'pt-PT': 'Portuguese (Portugal)',
-					'pt-AO': 'Portuguese (Angola)',
-					'pt-MZ': 'Portuguese (Mozambique)',
-				})
-				.setValue(this.plugin.settings.portugueseVeriety ?? 'default')
-				.onChange(async value => {
-					if (value === 'default') {
-						this.plugin.settings.portugueseVeriety = undefined;
-					} else {
-						this.plugin.settings.portugueseVeriety = value as 'pt-BR' | 'pt-PT' | 'pt-AO' | 'pt-MZ';
-					}
-					await this.plugin.saveSettings();
-				});
-		});
+    new Setting(containerEl)
+      .setName("Ignore Rules")
+      .setDesc("Ignore issues from rules (one per line).")
+      .setClass("sc-settings")
+      .addTextArea(component => {
+        component
+          .setValue(this.plugin.settings.ignoreRules.join("\n"))
+          .setPlaceholder("Google.Exclamation\nwrite-good.E-Prime")
+          .onChange(async (value: string) => {
+            this.plugin.settings.ignoreRules = value
+              .split("\n")
+              .map(v => v.trim());
+            await this.plugin.saveSettings();
+          });
+      });
 
-		new Setting(containerEl).setName('Interpret Catalan as').addDropdown(component => {
-			component
-				.addOptions({
-					default: '---',
-					'ca-ES': 'Catalan',
-					'ca-ES-valencia': 'Catalan (Valencian)',
-				})
-				.setValue(this.plugin.settings.catalanVeriety ?? 'default')
-				.onChange(async value => {
-					if (value === 'default') {
-						this.plugin.settings.catalanVeriety = undefined;
-					} else {
-						this.plugin.settings.catalanVeriety = value as 'ca-ES' | 'ca-ES-valencia';
-					}
-					await this.plugin.saveSettings();
-				});
-		});
+    containerEl.createEl("h4", { text: "Advanced" });
 
-		containerEl.createEl('h3', { text: 'Rule Categories' });
+    new Setting(containerEl)
+      .setName("Vale CLI path")
+      .setDesc("Path to Vale executable")
+      .addText(text => {
+        text
+          .setValue(this.plugin.settings.valePath)
+          .onChange(async (value: string) => {
+            this.plugin.settings.valePath = value;
+            await this.plugin.saveSettings();
+          });
+      });
 
-		new Setting(containerEl)
-			.setName('Picky Mode')
-			.setDesc(
-				'Provides more style and tonality suggestions, detects long or complex sentences, recognizes colloquialism and redundancies, proactively suggests synonyms for commonly overused words',
-			)
-			.addToggle(component => {
-				component.setValue(this.plugin.settings.pickyMode).onChange(async value => {
-					this.plugin.settings.pickyMode = value;
-					await this.plugin.saveSettings();
-				});
-			});
-
-		new Setting(containerEl)
-			.setName('Other rule categories')
-			.setDesc('Enter a comma-separated list of categories')
-			.addText(text =>
-				text
-					.setPlaceholder('Eg. CATEGORY_1,CATEGORY_2')
-					.setValue(this.plugin.settings.ruleOtherCategories || '')
-					.onChange(async value => {
-						this.plugin.settings.ruleOtherCategories = value.replace(/\s+/g, '');
-						await this.plugin.saveSettings();
-					}),
-			)
-			.then(setting => {
-				setting.descEl.createEl('br');
-				setting.descEl.createEl(
-					'a',
-					{
-						text: 'Click here for a list of rules and categories',
-						href: 'https://community.languagetool.org/rule/list',
-					},
-					a => {
-						a.setAttr('target', '_blank');
-					},
-				);
-			});
-
-		new Setting(containerEl)
-			.setName('Enable Specific Rules')
-			.setDesc('Enter a comma-separated list of rules')
-			.addText(text =>
-				text
-					.setPlaceholder('Eg. RULE_1,RULE_2')
-					.setValue(this.plugin.settings.ruleOtherRules || '')
-					.onChange(async value => {
-						this.plugin.settings.ruleOtherRules = value.replace(/\s+/g, '');
-						await this.plugin.saveSettings();
-					}),
-			)
-			.then(setting => {
-				setting.descEl.createEl('br');
-				setting.descEl.createEl(
-					'a',
-					{
-						text: 'Click here for a list of rules and categories',
-						href: 'https://community.languagetool.org/rule/list',
-					},
-					a => {
-						a.setAttr('target', '_blank');
-					},
-				);
-			});
-
-		new Setting(containerEl)
-			.setName('Disable Specific Rules')
-			.setDesc('Enter a comma-separated list of rules')
-			.addText(text =>
-				text
-					.setPlaceholder('Eg. RULE_1,RULE_2')
-					.setValue(this.plugin.settings.ruleOtherDisabledRules || '')
-					.onChange(async value => {
-						this.plugin.settings.ruleOtherDisabledRules = value.replace(/\s+/g, '');
-						await this.plugin.saveSettings();
-					}),
-			)
-			.then(setting => {
-				setting.descEl.createEl('br');
-				setting.descEl.createEl(
-					'a',
-					{
-						text: 'Click here for a list of rules and categories',
-						href: 'https://community.languagetool.org/rule/list',
-					},
-					a => {
-						a.setAttr('target', '_blank');
-					},
-				);
-			});
-	}
+    new Setting(containerEl)
+      .setName("Vale configuration")
+      .setDesc("Path to Vale ini file")
+      .addText(text => {
+        text
+          .setValue(this.plugin.settings.configPath)
+          .onChange(async (value: string) => {
+            this.plugin.settings.configPath = value;
+            this.plugin.settings.saveValeConfig = true;
+            await this.plugin.saveSettings();
+          });
+      });
+  }
 }
